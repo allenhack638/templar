@@ -10,12 +10,13 @@ export interface TemplarContext {
 export const createContext = (
     projectName: string,
     templateName: string,
-    cwd: string = process.cwd()
+    cwd: string = process.cwd(),
+    templatesDir: string = path.resolve(cwd, 'templates')
 ): TemplarContext => {
     return {
         projectName,
         projectPath: path.resolve(cwd, projectName),
         templateName,
-        templatePath: path.resolve(cwd, 'templates', templateName),
+        templatePath: path.resolve(templatesDir, templateName),
     };
 };

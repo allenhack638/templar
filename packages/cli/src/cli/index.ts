@@ -15,8 +15,21 @@ interface TemplateMetadata {
     description: string;
 }
 
+const getTemplatesDir = async (): Promise<string> => {
+    const localTemplates = path.resolve(process.cwd(), 'templates');
+    if (await fs.pathExists(localTemplates)) return localTemplates;
+
+    const monorepoTemplates = path.resolve(process.cwd(), 'packages', 'templates');
+    if (await fs.pathExists(monorepoTemplates)) return monorepoTemplates;
+
+    // Fallback to local even if it doesn't exist yet (for errors)
+    return localTemplates;
+};
+
 const getTemplates = async (): Promise<TemplateMetadata[]> => {
-    const templatesJsonPath = path.resolve(process.cwd(), 'templates', 'templates.json');
+    const templatesDir = await getTemplatesDir();
+    const templatesJsonPath = path.join(templatesDir, 'templates.json');
+
     if (!(await fs.pathExists(templatesJsonPath))) {
         throw new Error(`Templates registry is missing or corrupted.`);
     }
@@ -25,7 +38,7 @@ const getTemplates = async (): Promise<TemplateMetadata[]> => {
     // Filter to only existing template folders
     const validTemplates: TemplateMetadata[] = [];
     for (const item of metadata) {
-        const itemPath = path.resolve(process.cwd(), 'templates', item.name);
+        const itemPath = path.join(templatesDir, item.name);
         if (await fs.pathExists(itemPath)) {
             validTemplates.push(item);
         }
@@ -47,7 +60,8 @@ const validateTemplateExists = async (templateName: string): Promise<boolean> =>
     const existsInMeta = templates.some(t => t.name === templateName);
     if (!existsInMeta) return false;
 
-    const templatePath = path.resolve(process.cwd(), 'templates', templateName);
+    const templatesDir = await getTemplatesDir();
+    const templatePath = path.join(templatesDir, templateName);
     return await fs.pathExists(templatePath);
 };
 
@@ -130,7 +144,8 @@ program
 
             logger.info(`Generating ${template} project: ${projectName}...`);
 
-            const context = createContext(projectName, template);
+            const templatesDir = await getTemplatesDir();
+            const context = createContext(projectName, template, process.cwd(), templatesDir);
             const stepsJson = await loadTemplateSteps(context.templatePath);
 
             await runSteps(stepsJson, context);
