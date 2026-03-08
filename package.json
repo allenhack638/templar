@@ -1,5 +1,5 @@
 {
-  "name": "templar",
+  "name": "create-templar",
   "version": "1.0.1",
   "type": "module",
   "description": "A step-driven project scaffolding CLI",
