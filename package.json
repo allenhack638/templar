@@ -1,15 +1,25 @@
 {
-  "name": "templar",
+  "name": "@allenhack638/templar",
   "version": "1.0.0",
   "type": "module",
-  "description": "",
-  "main": "index.js",
+  "description": "A step-driven project scaffolding CLI",
+  "main": "dist/index.js",
+  "bin": {
+    "templar": "./dist/index.js"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "cli",
+    "scaffolding",
+    "templates"
+  ],
+  "author": "allenhack638",
   "license": "ISC",
   "packageManager": "pnpm@10.26.1",
   "devDependencies": {
