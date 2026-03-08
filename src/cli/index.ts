@@ -9,10 +9,46 @@ import { runSteps } from '../engine/stepRunner.js';
 
 const program = new Command();
 
-const getTemplates = async () => {
-    const templatesPath = path.resolve(process.cwd(), 'templates');
-    const items = await fs.readdir(templatesPath);
-    return items.filter((item) => fs.statSync(path.join(templatesPath, item)).isDirectory());
+interface TemplateMetadata {
+    name: string;
+    displayName: string;
+    description: string;
+}
+
+const getTemplates = async (): Promise<TemplateMetadata[]> => {
+    const templatesJsonPath = path.resolve(process.cwd(), 'templates', 'templates.json');
+    if (!(await fs.pathExists(templatesJsonPath))) {
+        throw new Error(`Templates registry is missing or corrupted.`);
+    }
+    const metadata: TemplateMetadata[] = await fs.readJson(templatesJsonPath);
+
+    // Filter to only existing template folders
+    const validTemplates: TemplateMetadata[] = [];
+    for (const item of metadata) {
+        const itemPath = path.resolve(process.cwd(), 'templates', item.name);
+        if (await fs.pathExists(itemPath)) {
+            validTemplates.push(item);
+        }
+    }
+    return validTemplates;
+};
+
+const sanitizeProjectName = (name: string): string => {
+    return name
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, '-')
+        .replace(/[^a-z0-9-_]/g, '')
+        .replace(/-+/g, '-');
+};
+
+const validateTemplateExists = async (templateName: string): Promise<boolean> => {
+    const templates = await getTemplates();
+    const existsInMeta = templates.some(t => t.name === templateName);
+    if (!existsInMeta) return false;
+
+    const templatePath = path.resolve(process.cwd(), 'templates', templateName);
+    return await fs.pathExists(templatePath);
 };
 
 program
@@ -23,18 +59,61 @@ program
     .argument('[project-name]', 'Project folder name')
     .action(async (templateArg, projectNameArg) => {
         try {
-            let template = templateArg;
-            let projectName = projectNameArg;
+            const templates = await getTemplates();
+            if (templates.length === 0) {
+                throw new Error('No valid templates found in the registry. Please check your "templates" directory.');
+            }
 
-            // Handle missing arguments interactively
-            if (!template && !projectName) {
-                const templates = await getTemplates();
+            let template = '';
+            let projectName = '';
+
+            if (templateArg && projectNameArg) {
+                // Both provided: template project-name
+                if (!(await validateTemplateExists(templateArg))) {
+                    throw new Error(`Invalid template: "${templateArg}". Please select from the list.`);
+                }
+                template = templateArg;
+                projectName = projectNameArg;
+            } else if (templateArg) {
+                // One arg: could be template OR project name
+                if (await validateTemplateExists(templateArg)) {
+                    template = templateArg;
+                    const answers = await inquirer.prompt([
+                        {
+                            type: 'input',
+                            name: 'projectName',
+                            message: 'Project name:',
+                            validate: (input) => (input ? true : 'Project name is required'),
+                        },
+                    ]);
+                    projectName = answers.projectName;
+                } else {
+                    // Not a template, assume it's the project name
+                    projectName = templateArg;
+                    const answers = await inquirer.prompt([
+                        {
+                            type: 'list',
+                            name: 'template',
+                            message: 'Select a template:',
+                            choices: templates.map(t => ({
+                                name: `${t.displayName} - ${t.description}`,
+                                value: t.name
+                            })),
+                        },
+                    ]);
+                    template = answers.template;
+                }
+            } else {
+                // No args: prompt for both
                 const answers = await inquirer.prompt([
                     {
                         type: 'list',
                         name: 'template',
                         message: 'Select a template:',
-                        choices: templates,
+                        choices: templates.map(t => ({
+                            name: `${t.displayName} - ${t.description}`,
+                            value: t.name
+                        })),
                     },
                     {
                         type: 'input',
@@ -45,26 +124,9 @@ program
                 ]);
                 template = answers.template;
                 projectName = answers.projectName;
-            } else if (template && !projectName) {
-                // If only one arg is provided, the first arg is the PROJECT NAME, and template is missing.
-                // Wait, the prompt says:
-                /*
-                  If the user runs:
-                  npx templar my-app
-                  The CLI should ask for the template only.
-                */
-                projectName = templateArg; // Re-assign
-                const templates = await getTemplates();
-                const answers = await inquirer.prompt([
-                    {
-                        type: 'list',
-                        name: 'template',
-                        message: 'Select a template:',
-                        choices: templates,
-                    },
-                ]);
-                template = answers.template;
             }
+
+            projectName = sanitizeProjectName(projectName);
 
             logger.info(`Generating ${template} project: ${projectName}...`);
 

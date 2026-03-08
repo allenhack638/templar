@@ -20,7 +20,6 @@ export const runSteps = async (stepsJSON: StepsJSON, context: TemplarContext) =>
 export const runStep = async (step: Step, context: TemplarContext) => {
     const { type, action, options } = step;
 
-    logger.step(type, action);
 
     try {
         // Dynamic import based on project structure

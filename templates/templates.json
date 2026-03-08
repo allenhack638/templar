@@ -1,0 +1,17 @@
+[
+    {
+        "name": "react-basic",
+        "displayName": "React Basic",
+        "description": "A simple React template with minimal setup"
+    },
+    {
+        "name": "express-api",
+        "displayName": "Express API",
+        "description": "Production-ready Express.js API boilerplate"
+    },
+    {
+        "name": "fullstack",
+        "displayName": "Fullstack App",
+        "description": "A monorepo with React frontend and Express backend"
+    }
+]
