@@ -1,0 +1,11 @@
+{
+    "name": "@allenhack638/templar-templates",
+    "version": "1.0.0",
+    "description": "Remote templates for the Templar CLI",
+    "publishConfig": {
+        "access": "public"
+    },
+    "files": [
+        "*"
+    ]
+}
