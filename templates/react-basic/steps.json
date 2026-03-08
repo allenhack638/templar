@@ -1,0 +1,45 @@
+{
+    "steps": [
+        {
+            "type": "file",
+            "action": "create",
+            "options": {
+                "file": "package.json",
+                "content": "{\n  \"name\": \"my-app\",\n  \"version\": \"1.0.0\",\n  \"dependencies\": {}\n}"
+            }
+        },
+        {
+            "type": "file",
+            "action": "copy",
+            "options": {
+                "from": "files",
+                "to": "./"
+            }
+        },
+        {
+            "type": "package",
+            "action": "install",
+            "options": {
+                "packages": {
+                    "react": "18.3.1"
+                }
+            }
+        },
+        {
+            "type": "file",
+            "action": "create",
+            "options": {
+                "file": "src/index.css",
+                "content": "body { margin: 0; }"
+            }
+        },
+        {
+            "type": "edit",
+            "action": "prepend",
+            "options": {
+                "file": "src/index.css",
+                "content": "@import './theme.css';"
+            }
+        }
+    ]
+}
