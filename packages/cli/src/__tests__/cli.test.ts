@@ -233,8 +233,8 @@ describe('Route 1 — Direct remote template (--template)', () => {
         await run(argv(PROJECT_NAME, '--template', GITHUB_SOURCE));
 
         // remove() on the temp dir must happen BEFORE downloadTemplate()
-        const removeOrder = removeMock.mock.invocationCallOrder[0];
-        const dlOrder     = dlMock.mock.invocationCallOrder[0];
+        const removeOrder = removeMock.mock.invocationCallOrder[0]!;
+        const dlOrder     = dlMock.mock.invocationCallOrder[0]!;
         expect(removeOrder).toBeLessThan(dlOrder);
         expect(exitSpy).not.toHaveBeenCalled();
     });
@@ -589,7 +589,7 @@ describe('Network failures — remote catalog (--list)', () => {
 describe('Filesystem chaos — local path (--local)', () => {
 
     it('exits(1) when the --local path does not exist on disk', async () => {
-        pathExistsMock.mockResolvedValue(false);
+        pathExistsMock.mockImplementation(async () => false);
 
         await run(argv(PROJECT_NAME, '--local', '/nonexistent/path'));
 
@@ -598,7 +598,7 @@ describe('Filesystem chaos — local path (--local)', () => {
     });
 
     it('exits(1) when --local points to a file that is neither a directory nor .json', async () => {
-        pathExistsMock.mockResolvedValue(true);
+        pathExistsMock.mockImplementation(async () => true);
         statSyncMock.mockReturnValue({ isDirectory: () => false } as any);
 
         await run(argv(PROJECT_NAME, '--local', '/some/archive.tar.gz'));
