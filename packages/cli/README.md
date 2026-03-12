@@ -15,27 +15,33 @@ npx create-templar
 ## Usage
 
 ```bash
-# Interactive mode — prompts for template and project name
+# Interactive wizard — prompts for everything
 templar
-
-# Specify a template
-templar react-basic
-
-# Specify a project name
 templar my-app
 
-# Specify both — no prompts
-templar react-basic my-app
+# Direct remote template (no menu)
+templar my-app --template github:user/repo
+
+# Remote JSON catalog → interactive menu
+templar my-app --list https://example.com/templates.json
+
+# Local template directory (great for development)
+templar my-app --local ./my-template
+
+# Local JSON catalog → interactive menu
+templar my-app --local ./catalog.json
 ```
+
+`--template`, `--list`, and `--local` are mutually exclusive. Providing more than one exits immediately with an error.
 
 ## How It Works
 
-When you run `templar`, it:
+The CLI is a pure traffic router — it resolves a template source, hands it to the engine, and gets out of the way.
 
-1. **Fetches** the template registry from GitHub (or locally in dev mode)
-2. **Prompts** you to select a template and enter a project name (if not provided as arguments)
-3. **Downloads** the selected template into a new directory
-4. **Executes** each step defined in the template's `steps.json` sequentially
+1. **Route** — the flag (or interactive wizard) determines the source
+2. **Download** — remote sources are fetched via `giget` into a temporary sibling folder
+3. **Validate** — `steps.json` must be present and valid JSON before execution starts
+4. **Execute** — steps run sequentially; the temp folder is deleted when done (success or failure)
 
 ## Available Templates
 
@@ -62,8 +68,6 @@ pnpm run dev
 # Type check
 pnpm run check-types
 ```
-
-**Dev mode**: When running from within the monorepo, the CLI automatically detects the local `packages/templates/` directory and uses it instead of fetching from GitHub. This lets you develop and test templates without publishing.
 
 ## Project Name Rules
 

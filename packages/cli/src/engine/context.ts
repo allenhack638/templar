@@ -1,22 +1,25 @@
-import path from 'path';
-
 export interface TemplarContext {
     projectName: string;
     projectPath: string;
     templateName: string;
     templatePath: string;
+    params: Record<string, unknown>;
 }
 
-export const createContext = (
-    projectName: string,
-    templateName: string,
-    cwd: string = process.cwd(),
-    templatesDir: string = path.resolve(cwd, 'templates')
-): TemplarContext => {
+export interface CreateContextConfig {
+    projectName: string;
+    projectPath: string;
+    templateName: string;
+    templatePath: string;
+    params?: Record<string, unknown>;
+}
+
+export const createContext = (config: CreateContextConfig): TemplarContext => {
     return {
-        projectName,
-        projectPath: path.resolve(cwd, projectName),
-        templateName,
-        templatePath: path.resolve(templatesDir, templateName),
+        projectName: config.projectName,
+        projectPath: config.projectPath,
+        templateName: config.templateName,
+        templatePath: config.templatePath,
+        params: config.params ?? {},
     };
 };

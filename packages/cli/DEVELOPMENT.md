@@ -44,17 +44,22 @@ This runs `tsx watch src/index.ts`, which:
 To scaffold a project while in dev mode:
 
 ```bash
-node --import tsx/esm src/index.ts react-basic my-test-app
+# Interactive wizard
+node --import tsx/esm src/index.ts my-test-app
+
+# Direct local template (fastest for template development)
+node --import tsx/esm src/index.ts my-test-app --local ../../templates/react-basic
+
+# Remote template
+node --import tsx/esm src/index.ts my-test-app --template github:user/repo
 ```
 
 Or link the bin globally for a cleaner experience:
 
 ```bash
-pnpm link --global   # run once from packages/cli/
-templar react-basic my-test-app
+pnpm link --global          # run once from packages/cli/
+templar my-test-app --local ../../templates/react-basic
 ```
-
-> **Dev mode detection**: When the CLI is run from inside the monorepo, it automatically detects `packages/templates/` next to itself and uses those local templates instead of fetching from GitHub. You will see a `🧪 Dev Mode: Using local template registry` message confirming this.
 
 ### Building
 
@@ -83,9 +88,7 @@ pnpm --filter create-templar check-types
 ```
 packages/cli/
 ├── src/
-│   ├── index.ts              # Shebang entry point — just calls cli/index.ts
-│   ├── cli/
-│   │   └── index.ts          # CLI definition, argument parsing, orchestration
+│   ├── index.ts              # Shebang + all CLI logic (routing, prompts, engine invocation)
 │   ├── engine/
 │   │   ├── context.ts        # TemplarContext factory
 │   │   ├── templateLoader.ts # Loads & validates steps.json
@@ -113,24 +116,24 @@ packages/cli/
 
 ## Architecture Overview
 
-The CLI execution follows three phases:
+The CLI is a **pure traffic router**. It parses flags, validates them, resolves a `templatePath`, and hands everything to the engine. It has no opinion about what the engine does with it.
 
 ```
-Phase 1 — Registry
-  getTemplates()
-    └── dev mode?  → read local packages/templates/templates.json
-                     else → fetch from GitHub raw URL
-
-Phase 2 — Download
-  downloadOrCopyTemplate(name, dest)
-    └── dev mode?  → fs.copy() from local packages/templates/<name>/
-                     else → giget pulls from GitHub
-
-Phase 3 — Execute
-  loadTemplateSteps(targetPath)   ← reads steps.json from copied template dir
-  createContext(...)              ← builds TemplarContext
-  runSteps(stepsJSON, context)    ← iterates steps, dynamically imports handler
+src/index.ts
+  │
+  ├── --template <source>   → downloadToTemp()  ─┐
+  ├── --list <url>          → fetchCatalog()      ├─ runEngine(projectPath, templatePath, params)
+  ├── --local <path>        → fs.statSync()      ─┘       │
+  └── (no flags)            → interactive wizard          ├─ loadTemplateSteps(templatePath)
+                                                           ├─ createContext({ ... })
+                                                           └─ runSteps(stepsJSON, context)
 ```
+
+**Temp folder strategy (remote routes only):**
+- A sibling folder `<project-name>-templar-temp` is created for the download
+- Stale temp folders from crashed runs are silently overwritten
+- The `finally` block deletes the temp folder whether the engine succeeds or fails
+- Local routes (`--local`) use the source directory directly — no temp folder, no network
 
 ### How `runSteps` resolves handlers
 
@@ -182,14 +185,27 @@ No registration or switch-case update needed — the step runner discovers handl
 
 ```typescript
 interface TemplarContext {
-    projectName: string;   // e.g. "my-app"
-    projectPath: string;   // absolute path to generated project
-    templateName: string;  // e.g. "react-basic"
-    templatePath: string;  // absolute path to template source (inside project after copy)
+    projectName: string;              // e.g. "my-app"
+    projectPath: string;              // absolute path to the generated project
+    templateName: string;             // e.g. "react-basic"
+    templatePath: string;             // absolute path to the template source directory
+    params: Record<string, unknown>;  // arbitrary CLI flags passed through from the router
 }
 ```
 
-`templatePath` points to the template directory that was **copied into the target project**, not the original source. Step handlers read static assets from here (e.g., plugin scripts via `plugin:execute`).
+`createContext` now takes a single config object with all paths explicitly provided — no path guessing:
+
+```typescript
+createContext({
+    projectName,
+    projectPath,   // where the new project will be created
+    templateName,
+    templatePath,  // temp dir (remote) or local dir — where steps.json and assets live
+    params,        // forwarded from CLI options, available to plugins and future handlers
+})
+```
+
+`templatePath` is always a **separate directory** from `projectPath`. For remote templates it is the temp folder; for local routes it is the source directory the user pointed at. Step handlers read static assets from `templatePath` and write generated output to `projectPath`.
 
 ### `utils/logger.ts`
 
@@ -217,13 +233,16 @@ Wraps `pnpm add` and `pnpm add -D`. Converts a `Record<string, string>` package 
 ### Testing a template end-to-end
 
 ```bash
-# 1. Start the CLI against a local template
-node --import tsx/esm src/index.ts react-basic test-output
+# 1. Scaffold using a local template (fastest — no network, no temp folder)
+node --import tsx/esm src/index.ts test-output --local ../../templates/react-basic
 
-# 2. Inspect the result
+# 2. Or test the full remote path
+node --import tsx/esm src/index.ts test-output --template github:allenhack638/templar/packages/templates/react-basic
+
+# 3. Inspect the result
 ls -la test-output/
 
-# 3. Clean up
+# 4. Clean up (temp folder is auto-deleted, only project dir remains)
 rm -rf test-output/
 ```
 
@@ -246,37 +265,38 @@ To trace which handler is being loaded, add a log at the top of `stepRunner.ts`:
 console.log('[stepRunner] loading', handlerPath);
 ```
 
-### Checking dev mode is active
-
-Run the CLI from any directory inside the monorepo. If you see:
-
-```
-ℹ 🧪 Dev Mode: Using local template registry
-```
-
-dev mode is active. If you don't see this, the CLI cannot find `packages/templates/templates.json` relative to its location — check your `__dirname` resolution in `cli/index.ts`.
-
 ---
 
 ## Extending the CLI
 
-### Adding a new CLI flag or command
+### Adding a new CLI flag (params passthrough)
 
-The CLI uses [Commander.js](https://github.com/tj/commander.js). Add options in `cli/index.ts`:
+Any `.option()` that is not a routing flag (`--template`, `--list`, `--local`) is automatically stripped out of `options` and forwarded to the engine as `context.params`. You do not need to touch the routing logic.
 
 ```typescript
+// In src/index.ts — just add the option definition:
 program
-    .option('--no-install', 'Skip package installation steps')
-    .action(async (templateArg, projectNameArg, options) => {
-        // options.install === false when --no-install is passed
-    });
+    .option('--dry-run', 'Preview steps without executing them')
+    .option('--registry <url>', 'Override the default official template registry')
 ```
 
-Propagate the flag through `TemplarContext` if step handlers need to read it.
+Then read it inside a step handler or plugin:
 
-### Changing how templates are fetched
+```typescript
+// In any step handler or plugin:
+if (context.params['dry-run']) {
+    logger.info('[dry-run] would execute: ...');
+    return;
+}
+```
 
-Edit `getTemplates()` and `downloadOrCopyTemplate()` in `cli/index.ts`. Both functions check `getDevTemplatesDir()` first — preserve that contract so local development keeps working.
+### Adding a new routing flag
+
+If you need a new **source type** (e.g., `--npm <package>`), add a handler function following the same pattern as `handleDirectTemplate`, then add a branch in the dispatch block at the bottom of the `program.action` callback. Extract the new flag from `options` alongside `template`, `list`, `local` so it does not leak into `params`.
+
+### Changing the remote registry URL
+
+Change the `REGISTRY_URL` constant at the top of `src/index.ts`. The interactive fallback passes this URL to `handleRemoteCatalog`, so one change covers both the interactive wizard and any code that references it.
 
 ---
 
