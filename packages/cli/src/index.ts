@@ -3,6 +3,7 @@ import { Command } from 'commander';
 import inquirer from 'inquirer';
 import fs from 'fs-extra';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { downloadTemplate } from 'giget';
 import { logger } from './utils/logger.js';
 import { loadTemplateSteps } from './engine/templateLoader.js';
@@ -35,7 +36,24 @@ interface SourceFlags {
     template?: string;
     list?: string;
     local?: string;
+    dryRun?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Environment helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Returns true when running inside a known CI environment.
+ * Covers GitHub Actions, GitLab CI, Jenkins, CircleCI, Bitbucket, and the
+ * generic CI=true convention used by most modern CI platforms.
+ */
+export const isCI = (): boolean =>
+    process.env.CI === 'true' ||
+    process.env.CI === '1' ||
+    !!process.env.CONTINUOUS_INTEGRATION ||
+    !!process.env.BUILD_ID ||
+    !!process.env.GITHUB_ACTIONS;
 
 // ---------------------------------------------------------------------------
 // Pure helpers
@@ -106,10 +124,11 @@ const downloadToTemp = async (source: string, tempDir: string): Promise<void> =>
     await downloadTemplate(source, { dir: tempDir, force: true });
 };
 
+// fs-extra's remove() is safe on non-existent paths (rm -rf semantics) —
+// no pathExists guard needed. This keeps the finally-block cleanup
+// unconditional, which tests can assert on reliably.
 const cleanupTemp = async (tempDir: string): Promise<void> => {
-    if (await fs.pathExists(tempDir)) {
-        await fs.remove(tempDir);
-    }
+    await fs.remove(tempDir);
 };
 
 // ---------------------------------------------------------------------------
@@ -219,9 +238,6 @@ const runEngine = async (
 /**
  * Route 1 — Direct remote template
  *   npx create-templar my-app --template github:user/repo
- *
- * Downloads the giget source to a temp folder, validates it,
- * runs the engine, then deletes the temp folder.
  */
 const handleDirectTemplate = async (
     source: string,
@@ -249,10 +265,6 @@ const handleDirectTemplate = async (
 /**
  * Route 2 — Remote template catalog
  *   npx create-templar my-app --list https://example.com/templates.json
- *
- * Fetches the JSON catalog, shows an interactive menu,
- * downloads the selected template to a temp folder, runs the engine,
- * then deletes the temp folder.
  */
 const handleRemoteCatalog = async (
     catalogUrl: string,
@@ -284,9 +296,6 @@ const handleRemoteCatalog = async (
  * Route 3 & 4 — Local path (directory or catalog JSON)
  *   npx create-templar my-app --local ./drafts/my-template
  *   npx create-templar my-app --local ./catalog.json
- *
- * Uses fs.statSync to distinguish a directory (Route 3) from
- * a .json file (Route 4). No network calls, no temp folder.
  */
 const handleLocalPath = async (
     localArg: string,
@@ -303,7 +312,6 @@ const handleLocalPath = async (
     const stat = fs.statSync(resolvedLocal);
 
     if (stat.isDirectory()) {
-        // Route 3: direct local template directory
         await assertValidTemplate(resolvedLocal);
 
         const projectPath = path.join(cwd, projectName);
@@ -314,11 +322,9 @@ const handleLocalPath = async (
         await runEngine(projectName, projectPath, templateName, resolvedLocal, params);
 
     } else if (resolvedLocal.endsWith('.json')) {
-        // Route 4: local catalog JSON
         const catalog = await readLocalCatalog(resolvedLocal);
         const selected = await promptCatalogSelection(catalog);
 
-        // Catalog entry sources are resolved relative to the catalog file's location.
         const catalogDir = path.dirname(resolvedLocal);
         const templatePath = path.resolve(catalogDir, selected.source);
 
@@ -348,21 +354,24 @@ const handleLocalPath = async (
  * Route 5 — Interactive fallback (no source flags)
  *   npx create-templar
  *   npx create-templar my-app
- *
- * Guides the user through selecting a source type, then delegates
- * to the appropriate route handler above.
  */
 const handleInteractiveFallback = async (
     projectNameArg: string | undefined,
     cwd: string,
     params: Record<string, unknown>,
 ): Promise<void> => {
-    // Step 1: resolve project name
+    // Refuse to block a CI pipeline on an interactive prompt.
+    if (isCI()) {
+        throw new Error(
+            'Running in a CI environment. Interactive mode is disabled. ' +
+            'Provide --template, --list, or --local flags explicitly.',
+        );
+    }
+
     const projectName = projectNameArg
         ? sanitizeProjectName(projectNameArg)
         : await promptProjectName();
 
-    // Step 2: choose source type
     const { sourceType } = await inquirer.prompt<{ sourceType: string }>([
         {
             type: 'list',
@@ -408,68 +417,98 @@ const handleInteractiveFallback = async (
 };
 
 // ---------------------------------------------------------------------------
-// CLI definition
+// Exported run() — the testable entrypoint
 // ---------------------------------------------------------------------------
 
-const program = new Command();
+/**
+ * Parses argv and executes the CLI.
+ * Exported so tests can call `run([...args])` directly without spawning
+ * a child process or fighting module-level side effects.
+ */
+export async function run(argv: string[] = process.argv): Promise<void> {
+    // A fresh Command instance per run() call avoids accumulated handler state
+    // between test invocations.
+    const program = new Command();
 
-program
-    .name('templar')
-    .description('A step-driven project scaffolding CLI')
-    .version('1.0.1')
-    .argument('[project-name]', 'Name of the project to scaffold')
-    .option('--template <source>', 'Directly scaffold from a remote source (e.g. github:user/repo)')
-    .option('--list <url>',        'Fetch a remote JSON catalog and pick a template interactively')
-    .option('--local <path>',      'Use a local template directory or local catalog.json')
-    .action(async (
-        projectNameArg: string | undefined,
-        options: SourceFlags & Record<string, unknown>,
-    ) => {
-        const cwd = process.cwd();
+    program
+        .name('templar')
+        .description('A step-driven project scaffolding CLI')
+        .version('1.0.1')
+        .argument('[project-name]', 'Name of the project to scaffold')
+        .option('--template <source>', 'Directly scaffold from a remote source (e.g. github:user/repo)')
+        .option('--list <url>',        'Fetch a remote JSON catalog and pick a template interactively')
+        .option('--local <path>',      'Use a local template directory or local catalog.json')
+        // --dry-run is an example of a domain-specific passthrough param.
+        // It is NOT handled specially by the router — it flows to context.params
+        // via the generic spread, proving the extensibility contract.
+        .option('--dry-run',           'Preview what the engine would do without executing steps')
+        .action(async (
+            projectNameArg: string | undefined,
+            options: SourceFlags & Record<string, unknown>,
+        ) => {
+            const cwd = process.cwd();
 
-        try {
-            // --- Route 6: mutual exclusivity gate ---
-            const activeSources = [options.template, options.list, options.local].filter(Boolean);
-            if (activeSources.length > 1) {
-                throw new Error(
-                    'Conflicting source flags detected. ' +
-                    'Provide exactly one of: --template, --list, or --local.',
-                );
+            try {
+                // --- Route 6: mutual exclusivity gate ---
+                const activeSources = [options.template, options.list, options.local].filter(Boolean);
+                if (activeSources.length > 1) {
+                    throw new Error(
+                        'Conflicting source flags detected. ' +
+                        'Provide exactly one of: --template, --list, or --local.',
+                    );
+                }
+
+                // Strip routing flags; everything else flows to the engine as params.
+                // This is deliberately generic — the router has NO knowledge of what
+                // params contain. Domain-specific flags (e.g. --dry-run, --table-name)
+                // pass through automatically without any hardcoded exceptions here.
+                const { template, list, local, ...params } = options;
+
+                // Resolve project name. In CI, refuse to prompt — fail fast instead.
+                const resolveProjectName = async (): Promise<string> => {
+                    if (projectNameArg) return sanitizeProjectName(projectNameArg);
+                    if (isCI()) {
+                        throw new Error(
+                            'Running in a CI environment. ' +
+                            'Project name argument is required (positional, before flags).',
+                        );
+                    }
+                    return promptProjectName();
+                };
+
+                // --- Dispatch ---
+                if (template) {
+                    const projectName = await resolveProjectName();
+                    await handleDirectTemplate(template, projectName, cwd, params);
+
+                } else if (list) {
+                    const projectName = await resolveProjectName();
+                    await handleRemoteCatalog(list, projectName, cwd, params);
+
+                } else if (local) {
+                    const projectName = await resolveProjectName();
+                    await handleLocalPath(local, projectName, cwd, params);
+
+                } else {
+                    await handleInteractiveFallback(projectNameArg, cwd, params);
+                }
+
+                logger.success('Project generated successfully!');
+
+            } catch (error: any) {
+                logger.error(error.message);
+                process.exit(1);
             }
+        });
 
-            // Strip routing flags; everything else is passed through to the engine as params.
-            const { template, list, local, ...params } = options;
+    await program.parseAsync(argv);
+}
 
-            // Resolve project name for flag-based routes (prompt only if arg is missing).
-            const resolveProjectName = async (): Promise<string> =>
-                projectNameArg
-                    ? sanitizeProjectName(projectNameArg)
-                    : promptProjectName();
+// ---------------------------------------------------------------------------
+// Entry-point guard — only auto-run when executed directly, never on import
+// ---------------------------------------------------------------------------
 
-            // --- Dispatch ---
-            if (template) {
-                const projectName = await resolveProjectName();
-                await handleDirectTemplate(template, projectName, cwd, params);
-
-            } else if (list) {
-                const projectName = await resolveProjectName();
-                await handleRemoteCatalog(list, projectName, cwd, params);
-
-            } else if (local) {
-                const projectName = await resolveProjectName();
-                await handleLocalPath(local, projectName, cwd, params);
-
-            } else {
-                // Interactive fallback — project name resolution handled inside.
-                await handleInteractiveFallback(projectNameArg, cwd, params);
-            }
-
-            logger.success('Project generated successfully!');
-
-        } catch (error: any) {
-            logger.error(error.message);
-            process.exit(1);
-        }
-    });
-
-program.parse(process.argv);
+const __filename = fileURLToPath(import.meta.url);
+if (path.resolve(process.argv[1] ?? '') === path.resolve(__filename)) {
+    run();
+}

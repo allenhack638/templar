@@ -89,6 +89,8 @@ pnpm --filter create-templar check-types
 packages/cli/
 ├── src/
 │   ├── index.ts              # Shebang + all CLI logic (routing, prompts, engine invocation)
+│   ├── __tests__/
+│   │   └── cli.test.ts       # Comprehensive Vitest suite (49 tests)
 │   ├── engine/
 │   │   ├── context.ts        # TemplarContext factory
 │   │   ├── templateLoader.ts # Loads & validates steps.json
@@ -108,6 +110,7 @@ packages/cli/
 ├── dist/                     # Build output (gitignored)
 ├── package.json
 ├── tsconfig.json
+├── vitest.config.ts
 ├── vite.config.ts
 └── README.md
 ```
@@ -297,6 +300,69 @@ If you need a new **source type** (e.g., `--npm <package>`), add a handler funct
 ### Changing the remote registry URL
 
 Change the `REGISTRY_URL` constant at the top of `src/index.ts`. The interactive fallback passes this URL to `handleRemoteCatalog`, so one change covers both the interactive wizard and any code that references it.
+
+---
+
+## Testing
+
+The test suite lives in `src/__tests__/cli.test.ts` and covers all routing branches, guards, error paths, and CI behaviour. It uses [Vitest](https://vitest.dev/) with full ESM + TypeScript support.
+
+### Running tests
+
+```bash
+# Run once (CI-style)
+pnpm test
+# or from monorepo root
+pnpm --filter create-templar test
+
+# Watch mode (re-runs on file save)
+pnpm test:watch
+
+# With coverage report
+pnpm test:coverage
+```
+
+From the **monorepo root** you can also run all package test suites together via TurboRepo:
+
+```bash
+pnpm turbo test
+```
+
+### What is mocked
+
+All external I/O is mocked — the suite never touches the real filesystem, network, or shell:
+
+| Module | Mocked via |
+|--------|-----------|
+| `giget` (`downloadTemplate`) | `vi.mock('giget', ...)` |
+| `fs-extra` (all methods) | `vi.mock('fs-extra', ...)` |
+| `inquirer` (`prompt`) | `vi.mock('inquirer', ...)` |
+| `fetch` (global) | `vi.stubGlobal('fetch', ...)` |
+| `../engine/templateLoader.js` | `vi.mock(...)` |
+| `../engine/stepRunner.js` | `vi.mock(...)` |
+| `../utils/logger.js` | `vi.mock(...)` |
+| `process.exit` | `vi.spyOn(process, 'exit')` |
+
+Mocks are reset between tests via `beforeEach` with `vi.resetAllMocks()` and a shared `setupHappyPath()` helper that re-applies the default happy-path stubs.
+
+### Fixture paths
+
+Fixture paths must be OS-correct absolute paths because the router calls `path.resolve(cwd, arg)` before passing them to `fs.pathExists`. Always construct fixture paths with `path.resolve`:
+
+```typescript
+// Correct — works on Windows and Unix
+const LOCAL_TEMPLATE_DIR = path.resolve('test-fixtures', 'my-template');
+
+// Wrong — Unix-only, will fail on Windows
+const LOCAL_TEMPLATE_DIR = '/tmp/my-template';
+```
+
+### Adding new tests
+
+1. Add a `describe` block (or `it` inside an existing one) in `src/__tests__/cli.test.ts`.
+2. Configure the mocks you need via the `setupHappyPath()` helper and then override specific calls.
+3. Call `run([...argv])` — this is the exported testable entrypoint that creates a fresh `Command` per call.
+4. Assert on mock call counts, arguments, or `exitSpy` to verify behaviour.
 
 ---
 
